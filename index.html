@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>119 AI通報訓練</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+JP:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #111;
+    --card: #222;
+    --card2: #2a2a2a;
+    --border: #333;
+    --red: #e53935;
+    --red-dim: #7f1010;
+    --red-glow: rgba(229,57,53,0.3);
+    --amber: #ff8f00;
+    --green: #00c853;
+    --text: #f0f0f0;
+    --text-muted: #888;
+    --text-dim: #555;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Noto Sans JP', sans-serif;
+  }
+
+  html, body { height: 100%; overscroll-behavior: none; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events: none; z-index: 9999;
+  }
+
+  /* HEADER */
+  header {
+    width: 100%; max-width: 480px;
+    padding-top: max(env(safe-area-inset-top, 0px), 18px);
+    padding-left: 20px; padding-right: 20px; padding-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .header-logo { display: flex; align-items: center; gap: 12px; }
+  .logo-badge {
+    background: var(--red); color: #fff;
+    font-family: var(--mono); font-size: 22px; font-weight: 700;
+    letter-spacing: 2px; padding: 4px 12px 5px; border-radius: 4px;
+    box-shadow: 0 0 18px var(--red-glow);
+  }
+  .header-title { font-size: 13px; font-weight: 300; letter-spacing: 3px; color: var(--text-muted); text-transform: uppercase; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); transition: background 0.3s, box-shadow 0.3s; flex-shrink: 0; }
+  .status-dot.active { background: var(--red); box-shadow: 0 0 10px var(--red); animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* MAIN */
+  main { width: 100%; max-width: 480px; flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 11px; }
+
+  /* COMPAT BANNER */
+  .compat-banner {
+    background: rgba(255,143,0,0.1); border: 1px solid rgba(255,143,0,0.3);
+    border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--amber);
+    display: none; line-height: 1.6;
+  }
+  .compat-banner.visible { display: block; }
+
+  /* TIMER */
+  .timer-bar { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; }
+  .timer-label { font-size: 11px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
+  .timer-display { font-family: var(--mono); font-size: 26px; color: var(--amber); letter-spacing: 4px; text-shadow: 0 0 12px rgba(255,143,0,0.4); }
+  .step-indicator { font-family: var(--mono); font-size: 12px; color: var(--text-dim); letter-spacing: 1px; }
+  .step-indicator span { color: var(--text-muted); }
+
+  /* LOG */
+  .log-area {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; flex: 1; min-height: 220px; max-height: 300px;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    display: flex; flex-direction: column; gap: 8px; scroll-behavior: smooth;
+  }
+  .log-area::-webkit-scrollbar { width: 4px; }
+  .log-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); font-size: 13px; letter-spacing: 2px; }
+  .log-msg { display: flex; flex-direction: column; gap: 2px; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .log-msg.ai { align-items: flex-start; }
+  .log-msg.user { align-items: flex-end; }
+  .msg-label { font-size: 10px; letter-spacing: 1.5px; font-family: var(--mono); }
+  .log-msg.ai .msg-label { color: var(--red); }
+  .log-msg.user .msg-label { color: var(--text-muted); }
+  .msg-bubble { max-width: 90%; padding: 9px 13px; border-radius: 8px; font-size: 14px; line-height: 1.6; word-break: break-all; }
+  .log-msg.ai .msg-bubble { background: rgba(229,57,53,0.12); border: 1px solid rgba(229,57,53,0.25); color: var(--text); }
+  .log-msg.user .msg-bubble { background: var(--card2); border: 1px solid var(--border); color: var(--text); }
+  .typing-dots { display:flex; gap:5px; padding:10px 13px; background:rgba(229,57,53,0.12); border:1px solid rgba(229,57,53,0.25); border-radius:8px; width:fit-content; }
+  .typing-dots span { width:6px; height:6px; border-radius:50%; background:var(--red); animation:dot 1.2s ease-in-out infinite; }
+  .typing-dots span:nth-child(2){animation-delay:0.2s} .typing-dots span:nth-child(3){animation-delay:0.4s}
+  @keyframes dot { 0%,80%,100%{opacity:0.2;transform:scale(0.8)} 40%{opacity:1;transform:scale(1.2)} }
+
+  /* VOICE VIZ */
+  .voice-viz { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px 14px; display:flex; align-items:center; gap:10px; min-height:50px; transition:border-color 0.3s; }
+  .voice-viz.listening { border-color: rgba(229,57,53,0.4); }
+  .viz-bars { display:flex; align-items:center; gap:3px; height:26px; flex-shrink:0; }
+  .viz-bar { width:3px; background:var(--text-dim); border-radius:2px; height:4px; }
+  .voice-viz.listening .viz-bar { background:var(--red); animation:vizAnim 0.6s ease-in-out infinite alternate; }
+  .viz-bar:nth-child(1){animation-delay:0s}.viz-bar:nth-child(2){animation-delay:0.1s}.viz-bar:nth-child(3){animation-delay:0.2s}
+  .viz-bar:nth-child(4){animation-delay:0.05s}.viz-bar:nth-child(5){animation-delay:0.15s}.viz-bar:nth-child(6){animation-delay:0.25s}.viz-bar:nth-child(7){animation-delay:0.08s}
+  @keyframes vizAnim { from{height:4px} to{height:22px} }
+  .viz-text { font-size:11px; color:var(--text-muted); letter-spacing:1px; font-family:var(--mono); flex-shrink:0; }
+  .voice-viz.listening .viz-text { color:var(--red); }
+  .viz-live { font-size:12px; color:var(--text-dim); font-style:italic; flex:1; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* MIC BUTTON ROW */
+  .mic-row { display:none; flex-direction:column; align-items:center; gap:10px; }
+  .mic-row.visible { display:flex; }
+  .btn-mic {
+    width:80px; height:80px; border-radius:50%;
+    border:2px solid var(--red-dim); background:var(--card);
+    color:var(--text-muted); font-size:32px;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition:all 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none; -webkit-user-select: none;
+  }
+  .btn-mic.recording {
+    background:rgba(229,57,53,0.18); border-color:var(--red); color:var(--red);
+    box-shadow:0 0 24px var(--red-glow);
+    animation:micPulse 1s ease-in-out infinite;
+  }
+  @keyframes micPulse { 0%,100%{box-shadow:0 0 10px var(--red-glow)} 50%{box-shadow:0 0 30px rgba(229,57,53,0.55)} }
+  .mic-hint { font-size:12px; color:var(--text-dim); letter-spacing:1px; font-family:var(--mono); text-align:center; }
+
+  /* MAIN BUTTON */
+  .btn-main {
+    width:100%; padding:16px; border:none; border-radius:8px;
+    font-family:var(--mono); font-size:16px; letter-spacing:3px;
+    cursor:pointer; text-transform:uppercase; transition:all 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-appearance: none; touch-action: manipulation;
+  }
+  .btn-main.start { background:var(--red); color:#fff; box-shadow:0 0 20px var(--red-glow), inset 0 1px 0 rgba(255,255,255,0.1); }
+  .btn-main.start:active { transform:scale(0.98); }
+  .btn-main.stop { background:transparent; color:var(--text-muted); border:1px solid var(--border); }
+  .btn-main.stop:active { border-color:var(--red-dim); color:var(--red); }
+  .btn-main:disabled { opacity:0.4; pointer-events:none; }
+
+  /* SCORE */
+  .score-card { background:var(--card); border:1px solid var(--green); border-radius:8px; padding:18px; display:none; flex-direction:column; gap:14px; box-shadow:0 0 20px rgba(0,200,83,0.1); }
+  .score-card.visible { display:flex; }
+  .score-title { font-family:var(--mono); font-size:11px; letter-spacing:3px; color:var(--green); text-transform:uppercase; }
+  .score-big { font-family:var(--mono); font-size:48px; color:var(--green); text-shadow:0 0 20px rgba(0,200,83,0.4); line-height:1; }
+  .score-big span { font-size:18px; color:var(--text-muted); }
+  .score-breakdown { display:flex; flex-direction:column; gap:8px; }
+  .score-row { display:flex; align-items:center; justify-content:space-between; font-size:13px; }
+  .score-row-label { color:var(--text-muted); }
+  .score-row-bar { flex:1; height:3px; background:var(--border); border-radius:2px; margin:0 12px; overflow:hidden; }
+  .score-row-fill { height:100%; background:var(--green); border-radius:2px; width:0; transition:width 1s ease; }
+  .score-row-val { font-family:var(--mono); font-size:12px; color:var(--text); min-width:36px; text-align:right; }
+  .score-comment { font-size:13px; color:var(--text-muted); line-height:1.7; border-left:2px solid var(--green); padding-left:12px; }
+
+  /* FOOTER */
+  footer { width:100%; text-align:center; padding:14px; font-size:10px; letter-spacing:2px; color:var(--text-dim); font-family:var(--mono); border-top:1px solid var(--border); margin-top:auto; }
+
+  /* ALERT */
+  .alert-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; z-index:1000; padding:20px; }
+  .alert-overlay.visible { display:flex; }
+  .alert-box { background:var(--card); border:1px solid var(--red); border-radius:10px; padding:28px 20px; width:100%; max-width:320px; text-align:center; box-shadow:0 0 40px var(--red-glow); }
+  .alert-icon { font-size:32px; margin-bottom:12px; }
+  .alert-title { font-family:var(--mono); font-size:13px; letter-spacing:2px; color:var(--red); margin-bottom:10px; text-transform:uppercase; }
+  .alert-body { font-size:14px; color:var(--text-muted); line-height:1.6; margin-bottom:20px; }
+  .alert-btn { background:var(--red); color:#fff; border:none; padding:10px 28px; border-radius:6px; font-family:var(--mono); font-size:13px; letter-spacing:2px; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-logo">
+    <div class="logo-badge">119</div>
+    <div class="header-title">AI通報訓練</div>
+  </div>
+  <div class="status-dot" id="statusDot"></div>
+</header>
+
+<main>
+  <div class="compat-banner" id="compatBanner"></div>
+
+  <div class="timer-bar">
+    <div>
+      <div class="timer-label">経過時間</div>
+      <div class="timer-display" id="timerDisplay">00:00</div>
+    </div>
+    <div class="step-indicator">STEP <span id="stepNum">—</span> / 6</div>
+  </div>
+
+  <div class="log-area" id="logArea">
+    <div class="log-empty" id="logEmpty">■ 待機中 ■</div>
+  </div>
+
+  <div class="voice-viz" id="voiceViz">
+    <div class="viz-bars">
+      <div class="viz-bar"></div><div class="viz-bar"></div><div class="viz-bar"></div>
+      <div class="viz-bar"></div><div class="viz-bar"></div><div class="viz-bar"></div>
+      <div class="viz-bar"></div>
+    </div>
+    <div class="viz-text" id="vizText">STANDBY</div>
+    <div class="viz-live" id="vizLive"></div>
+  </div>
+
+  <!-- iOSおよび手動マイクボタン -->
+  <div class="mic-row" id="micRow">
+    <button class="btn-mic" id="micBtn"
+      ontouchstart="micDown(event)" ontouchend="micUp(event)"
+      onmousedown="micDown(event)" onmouseup="micUp(event)">🎙</button>
+    <div class="mic-hint" id="micHint">押しながら話す</div>
+  </div>
+
+  <div class="score-card" id="scoreCard">
+    <div class="score-title">▶ 訓練結果</div>
+    <div class="score-big" id="scoreBig">0<span> / 10</span></div>
+    <div class="score-breakdown" id="scoreBreakdown"></div>
+    <div class="score-comment" id="scoreComment"></div>
+  </div>
+
+  <button class="btn-main start" id="mainBtn" onclick="handleMainBtn()">▶ 訓練を開始する</button>
+</main>
+
+<footer>©2026 NAKADA INDUSTRIAL CO.,LTD</footer>
+
+<div class="alert-overlay" id="alertOverlay">
+  <div class="alert-box">
+    <div class="alert-icon">⚠️</div>
+    <div class="alert-title" id="alertTitle">エラー</div>
+    <div class="alert-body" id="alertBody"></div>
+    <button class="alert-btn" onclick="closeAlert()">閉じる</button>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════
+//  環境検出
+// ════════════════════════════════
+const UA = navigator.userAgent;
+const IS_IOS     = /iPhone|iPad|iPod/.test(UA);
+const IS_ANDROID = /Android/.test(UA);
+const IS_SAFARI  = /Safari/.test(UA) && !/Chrome/.test(UA);
+const HAS_SR = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+const HAS_SS = !!window.speechSynthesis;
+
+// iOS or non-Android非Chrome → 手動マイクモード
+const MANUAL_MODE = IS_IOS || (!IS_ANDROID && IS_SAFARI) || !HAS_SR;
+
+// ════════════════════════════════
+//  状態
+// ════════════════════════════════
+let step = 0, isRunning = false, isSpeaking = false, isFinished = false;
+let isListening = false, awaitingInput = false;
+let timerInterval = null, elapsedSec = 0;
+let recognition = null;
+let confTotal = 0, confCount = 0;
+let answeredSteps = [];
+let audioCtx = null;
+let manualText = '';
+
+const QUESTIONS = [
+  '119番です。火事ですか、救急ですか？',
+  '住所を教えてください。',
+  'どこが燃えていますか？煙は出ていますか？',
+  'けがをされている方はいますか？',
+  'あなたの今いる場所の目標や目印となるものがありますか？',
+  'あなたのお名前と電話番号をおしえてください。',
+];
+
+// ════════════════════════════════
+//  AudioContext（ユーザー操作後に初期化）
+// ════════════════════════════════
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// ════════════════════════════════
+//  音声合成
+// ════════════════════════════════
+function speak(text) {
+  return new Promise(resolve => {
+    if (!HAS_SS) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    isSpeaking = true;
+    setVizStatus(false);
+
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'ja-JP';
+    utter.rate = IS_IOS ? 0.88 : 0.95;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+
+    const voices = speechSynthesis.getVoices();
+    const jv = voices.find(v => v.lang === 'ja-JP') || voices.find(v => v.lang.startsWith('ja'));
+    if (jv) utter.voice = jv;
+
+    let done = false;
+    // iOSはonendが来ないことがあるのでタイムアウトを保険にする
+    const timeout = setTimeout(() => { if (!done) { done = true; isSpeaking = false; resolve(); } }, text.length * 200 + 3500);
+
+    const finish = () => { if (done) return; done = true; clearTimeout(timeout); isSpeaking = false; resolve(); };
+    utter.onend = finish;
+    utter.onerror = finish;
+
+    // iOS SpeechSynthesis が止まるバグ対策
+    let keepAlive;
+    if (IS_IOS) {
+      keepAlive = setInterval(() => {
+        if (done) { clearInterval(keepAlive); return; }
+        speechSynthesis.pause();
+        speechSynthesis.resume();
+      }, 200);
+    }
+
+    speechSynthesis.speak(utter);
+  });
+}
+
+// ════════════════════════════════
+//  音声認識ビルダー
+// ════════════════════════════════
+function buildSR() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const r = new SR();
+  r.lang = 'ja-JP';
+  r.continuous = false;          // iOS は true 非対応
+  r.interimResults = !IS_IOS;   // iOS は false が安定
+  r.maxAlternatives = 1;
+  return r;
+}
+
+// ════════════════════════════════
+//  自動認識（Android Chrome など）
+// ════════════════════════════════
+function listenAuto() {
+  if (isFinished || isSpeaking) return;
+  if (recognition) { try { recognition.abort(); } catch(e){} }
+
+  recognition = buildSR();
+  setVizStatus(true);
+  isListening = true;
+  let finalText = '';
+
+  recognition.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        finalText += e.results[i][0].transcript;
+        const c = e.results[i][0].confidence;
+        if (c > 0) { confTotal += c; confCount++; }
+      } else { interim += e.results[i][0].transcript; }
+    }
+    document.getElementById('vizLive').textContent = interim || finalText;
+  };
+
+  recognition.onend = () => {
+    if (isFinished) return;
+    isListening = false;
+    setVizStatus(false);
+    document.getElementById('vizLive').textContent = '';
+    if (finalText.trim()) processAnswer(finalText.trim());
+    else setTimeout(() => { if (!isFinished && !isSpeaking) listenAuto(); }, 700);
+  };
+
+  recognition.onerror = e => {
+    isListening = false;
+    if (e.error === 'no-speech') {
+      setTimeout(() => { if (!isFinished && !isSpeaking) listenAuto(); }, 700);
+    } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      showAlert('マイクアクセス拒否', 'ブラウザの設定でマイクを許可してから再度お試しください。');
+      endSession(true);
+    }
+  };
+
+  try { recognition.start(); } catch(e) { setTimeout(() => listenAuto(), 600); }
+}
+
+// ════════════════════════════════
+//  手動マイク（iOS Safari）
+// ════════════════════════════════
+function listenManual() {
+  if (isFinished) return;
+  awaitingInput = true;
+  showMicRow(true);
+  document.getElementById('micHint').textContent = '🎙 ボタンを押しながら話してください';
+}
+
+function micDown(e) {
+  e.preventDefault();
+  if (!awaitingInput || isFinished || isListening) return;
+  ensureAudio();
+  manualText = '';
+
+  if (recognition) { try { recognition.abort(); } catch(ex){} }
+  recognition = buildSR();
+  recognition.interimResults = false;
+
+  recognition.onresult = ev => {
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      if (ev.results[i].isFinal) {
+        manualText += ev.results[i][0].transcript;
+        const c = ev.results[i][0].confidence;
+        if (c > 0) { confTotal += c; confCount++; }
+      }
+    }
+    document.getElementById('vizLive').textContent = manualText;
+  };
+
+  recognition.onerror = ev => {
+    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+      showAlert('マイクアクセス拒否', 'Safariの設定でマイクを「許可」にしてください。設定 → Safari → マイク');
+      endSession(true);
+    }
+  };
+
+  recognition.onend = () => { isListening = false; };
+
+  document.getElementById('micBtn').classList.add('recording');
+  document.getElementById('micHint').textContent = '● 録音中… 話し終えたら指を離す';
+  setVizStatus(true);
+  isListening = true;
+  try { recognition.start(); } catch(ex) {}
+}
+
+function micUp(e) {
+  e.preventDefault();
+  if (!isListening && manualText === '') return;
+
+  document.getElementById('micBtn').classList.remove('recording');
+  document.getElementById('micHint').textContent = '処理中…';
+  setVizStatus(false);
+
+  try { recognition.stop(); } catch(ex) {}
+  isListening = false;
+
+  setTimeout(() => {
+    document.getElementById('vizLive').textContent = '';
+    const text = manualText.trim();
+    if (text) {
+      awaitingInput = false;
+      showMicRow(false);
+      processAnswer(text);
+    } else {
+      document.getElementById('micHint').textContent = '聞き取れませんでした。もう一度押して話してください。';
+    }
+  }, 500);
+}
+
+function showMicRow(v) {
+  const el = document.getElementById('micRow');
+  if (v) el.classList.add('visible'); else el.classList.remove('visible');
+}
+
+// ════════════════════════════════
+//  統一エントリ
+// ════════════════════════════════
+function startListening() {
+  if (MANUAL_MODE) listenManual(); else listenAuto();
+}
+
+// ════════════════════════════════
+//  回答処理
+// ════════════════════════════════
+function processAnswer(text) {
+  addLog('user', text);
+  let valid = false;
+  if (step === 1) valid = /火事|救急|かじ|きゅうきゅう/.test(text);
+  else if (step === 2) valid = text.length >= 4;
+  else if (step === 3 || step === 4 || step === 5) valid = true;
+  else if (step === 6) valid = /[0-9０-９]/.test(text) && text.length >= 5;
+
+  if (valid) {
+    answeredSteps.push(step);
+    if (step < 6) { step++; document.getElementById('stepNum').textContent = step; setTimeout(() => askQ(step - 1), 500); }
+    else setTimeout(() => finishSession(), 500);
+  } else {
+    const hint = getHint(step);
+    setTimeout(async () => {
+      showTyping(); await delay(600); removeTyping();
+      addLog('ai', hint); await speak(hint);
+      if (!isFinished) startListening();
+    }, 300);
+  }
+}
+
+function getHint(s) {
+  if (s === 1) return 'もう一度お聞きします。火事ですか、救急ですか？';
+  if (s === 2) return '住所をもう少し詳しく教えてください。';
+  if (s === 6) return 'お名前と電話番号を、数字を含めてお伝えください。';
+  return '聞き取れませんでした。もう一度お答えください。';
+}
+
+// ════════════════════════════════
+//  フロー
+// ════════════════════════════════
+async function askQ(idx) {
+  if (isFinished) return;
+  showTyping(); await delay(500); removeTyping();
+  addLog('ai', QUESTIONS[idx]);
+  await speak(QUESTIONS[idx]);
+  if (!isFinished) startListening();
+}
+
+async function startSession() {
+  ensureAudio();
+  isRunning = true; isFinished = false; step = 1;
+  confTotal = 0; confCount = 0; answeredSteps = []; elapsedSec = 0; awaitingInput = false;
+
+  document.getElementById('logArea').innerHTML = '';
+  document.getElementById('stepNum').textContent = '1';
+  document.getElementById('timerDisplay').textContent = '00:00';
+  document.getElementById('scoreCard').classList.remove('visible');
+  showMicRow(false);
+
+  const btn = document.getElementById('mainBtn');
+  btn.className = 'btn-main stop'; btn.textContent = '■ 強制終了';
+  startTimer();
+
+  showTyping(); await delay(400); removeTyping();
+  addLog('ai', '119番です。訓練を開始します。');
+  await speak('119番です。訓練を開始します。');
+  await askQ(0);
+}
+
+function endSession(forced) {
+  if (isFinished) return;
+  isFinished = true; isRunning = false; awaitingInput = false;
+  stopTimer(); showMicRow(false);
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+  if (HAS_SS) window.speechSynthesis.cancel();
+  setVizStatus(false); isListening = false;
+  document.getElementById('vizText').textContent = 'STANDBY';
+  document.getElementById('vizLive').textContent = '';
+  const btn = document.getElementById('mainBtn');
+  btn.className = 'btn-main start'; btn.textContent = '▶ 訓練を開始する';
+  document.getElementById('stepNum').textContent = '—';
+  if (forced) { addLog('ai', '訓練を中断しました。'); }
+}
+
+async function finishSession() {
+  if (isFinished) return;
+  isFinished = true; isRunning = false; awaitingInput = false;
+  stopTimer(); showMicRow(false);
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+  setVizStatus(false); isListening = false;
+  document.getElementById('vizText').textContent = 'STANDBY';
+  document.getElementById('vizLive').textContent = '';
+  const btn = document.getElementById('mainBtn');
+  btn.className = 'btn-main start'; btn.textContent = '▶ 訓練を開始する';
+  document.getElementById('stepNum').textContent = '—';
+
+  const score = calcScore();
+  const msg = `訓練が完了しました。お疲れ様でした。あなたのスコアは10点満点中${score.total}点です。`;
+  showTyping(); await delay(700); removeTyping();
+  addLog('ai', msg); showScoreCard(score);
+  await speak(msg);
+  setTimeout(() => playBeep(), 400);
+}
+
+// ════════════════════════════════
+//  タイマー
+// ════════════════════════════════
+function startTimer() {
+  elapsedSec = 0;
+  timerInterval = setInterval(() => {
+    elapsedSec++;
+    document.getElementById('timerDisplay').textContent =
+      String(Math.floor(elapsedSec/60)).padStart(2,'0') + ':' + String(elapsedSec%60).padStart(2,'0');
+  }, 1000);
+}
+function stopTimer() { clearInterval(timerInterval); timerInterval = null; }
+
+// ════════════════════════════════
+//  UI ヘルパー
+// ════════════════════════════════
+function setVizStatus(active) {
+  const dot = document.getElementById('statusDot');
+  const viz = document.getElementById('voiceViz');
+  const txt = document.getElementById('vizText');
+  if (active) { dot.classList.add('active'); viz.classList.add('listening'); txt.textContent = 'LISTENING'; }
+  else { dot.classList.remove('active'); viz.classList.remove('listening'); txt.textContent = isSpeaking ? 'AI SPEAKING' : 'STANDBY'; }
+}
+
+function addLog(role, text) {
+  const area = document.getElementById('logArea');
+  const empty = document.getElementById('logEmpty');
+  if (empty) empty.remove();
+  const msg = document.createElement('div');
+  msg.className = 'log-msg ' + role;
+  msg.innerHTML = `<div class="msg-label">${role==='ai'?'▶ 指令センター':'▶ 通報者'}</div><div class="msg-bubble">${text}</div>`;
+  area.appendChild(msg);
+  area.scrollTop = area.scrollHeight;
+}
+function showTyping() {
+  const area = document.getElementById('logArea');
+  const el = document.createElement('div');
+  el.className='log-msg ai'; el.id='typingIndicator';
+  el.innerHTML='<div class="msg-label">▶ 指令センター</div><div class="typing-dots"><span></span><span></span><span></span></div>';
+  area.appendChild(el); area.scrollTop=area.scrollHeight;
+}
+function removeTyping() { const el=document.getElementById('typingIndicator'); if(el)el.remove(); }
+function delay(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+// ════════════════════════════════
+//  採点
+// ════════════════════════════════
+function calcScore() {
+  const req = [1,2,3,4,5,6];
+  const ans = req.filter(s=>answeredSteps.includes(s));
+  const coverScore = (ans.length/req.length)*6;
+  const avgConf = confCount>0 ? confTotal/confCount : 0.5;
+  const confScore = avgConf*4;
+  const total = Math.min(10, Math.round((coverScore+confScore)*10)/10);
+  return {
+    total,
+    coverage: Math.round(coverScore*10)/10,
+    coveragePct: Math.round((ans.length/req.length)*100),
+    confidence: Math.round(confScore*10)/10,
+    confidencePct: Math.round(avgConf*100),
+  };
+}
+
+function showScoreCard(score) {
+  document.getElementById('scoreCard').classList.add('visible');
+  document.getElementById('scoreBig').innerHTML = score.total+'<span> / 10</span>';
+  const bd = document.getElementById('scoreBreakdown');
+  bd.innerHTML = '';
+  [{label:'情報網羅性',val:score.coverage,max:6,pct:score.coveragePct},
+   {label:'音声信頼度',val:score.confidence,max:4,pct:score.confidencePct}].forEach(item=>{
+    const row=document.createElement('div'); row.className='score-row';
+    row.innerHTML=`<span class="score-row-label">${item.label}</span><div class="score-row-bar"><div class="score-row-fill" data-pct="${item.pct}" style="width:0%"></div></div><span class="score-row-val">${item.val} / ${item.max}</span>`;
+    bd.appendChild(row);
+  });
+  setTimeout(()=>{bd.querySelectorAll('.score-row-fill').forEach(el=>{el.style.width=el.dataset.pct+'%';});},100);
+  let comment='';
+  if(score.total>=9) comment='非常に優秀な通報訓練です。必要な情報を正確かつ迅速に伝えることができました。';
+  else if(score.total>=7) comment='良い通報訓練です。概ね正確に伝えられましたが、一部情報が不足していました。';
+  else if(score.total>=5) comment='改善の余地があります。住所・氏名・電話番号などの必須情報を確実に伝える練習をしましょう。';
+  else comment='訓練が必要です。緊急時には冷静に、住所・状況・連絡先を明確に伝えることが重要です。';
+  document.getElementById('scoreComment').textContent=comment;
+}
+
+// ════════════════════════════════
+//  ビープ
+// ════════════════════════════════
+function playBeep() {
+  try {
+    ensureAudio();
+    const osc=audioCtx.createOscillator(), gain=audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.type='sine'; osc.frequency.setValueAtTime(880,audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.3,audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+0.8);
+    osc.start(audioCtx.currentTime); osc.stop(audioCtx.currentTime+0.8);
+  } catch(e){}
+}
+
+// ════════════════════════════════
+//  ボタン
+// ════════════════════════════════
+function handleMainBtn() {
+  ensureAudio();
+  if (!isRunning) {
+    if (!HAS_SS) { showAlert('非対応ブラウザ','音声合成に対応したブラウザをご使用ください（iOS Safari / Android Chrome）。'); return; }
+    if (!HAS_SR) { showAlert('音声認識非対応','音声認識に対応したブラウザをご使用ください（iOS Safari 14.5以上 / Android Chrome）。'); return; }
+    startSession();
+  } else {
+    endSession(true);
+  }
+}
+
+function showAlert(t,b) { document.getElementById('alertTitle').textContent=t; document.getElementById('alertBody').textContent=b; document.getElementById('alertOverlay').classList.add('visible'); }
+function closeAlert() { document.getElementById('alertOverlay').classList.remove('visible'); }
+
+// ════════════════════════════════
+//  初期化・互換性バナー
+// ════════════════════════════════
+(function init() {
+  if (HAS_SS) { speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices(); }
+
+  const banner = document.getElementById('compatBanner');
+  if (IS_IOS) {
+    banner.textContent = '📱 iOSモード：🎙ボタンを押しながら話してください。初回はマイクの許可が必要です。';
+    banner.classList.add('visible');
+  } else if (MANUAL_MODE) {
+    banner.textContent = '📱 手動マイクモード：🎙ボタンを押しながら話してください。';
+    banner.classList.add('visible');
+  }
+})();
+</script>
+</body>
+</html>
