@@ -260,7 +260,8 @@ const IS_SAFARI  = /Safari/.test(UA) && !/Chrome/.test(UA);
 const HAS_SR = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 const HAS_SS = !!window.speechSynthesis;
 
-// iOS or non-Android非Chrome → 手動マイクモード
+// iOS（Safari・Chrome両方）→ 手動マイクモード
+// iOS Chrome も内部は WebKit なので Safari と同じ制約がある
 const MANUAL_MODE = IS_IOS || (!IS_ANDROID && IS_SAFARI) || !HAS_SR;
 
 // ════════════════════════════════
@@ -274,7 +275,9 @@ let confTotal = 0, confCount = 0;
 let answeredSteps = [];
 let audioCtx = null;
 let manualText = '';
+let micReleased = false; // 指を離した後 onend を待つフラグ
 
+// ① 「何名」→「なんめい」：iOS TTSは漢字「何名」を「なんな」と誤読するため平仮名で記述
 const QUESTIONS = [
   '119番です。火事ですか、救急ですか？',
   '住所を教えてください。',
@@ -285,7 +288,7 @@ const QUESTIONS = [
 ];
 
 // ════════════════════════════════
-//  AudioContext（ユーザー操作後に初期化）
+//  AudioContext
 // ════════════════════════════════
 function ensureAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -294,6 +297,7 @@ function ensureAudio() {
 
 // ════════════════════════════════
 //  音声合成
+//  ② 途切れ修正：pause/resume交互→paused時のみresume
 // ════════════════════════════════
 function speak(text) {
   return new Promise(resolve => {
@@ -304,12 +308,11 @@ function speak(text) {
 
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ja-JP';
-    // ② iOS はレートを下げると途切れにくくなる
-    utter.rate = IS_IOS ? 0.8 : 0.95;
+    utter.rate = IS_IOS ? 0.8 : 0.95;  // ② iOSはゆっくり読むと途切れにくい
     utter.pitch = 1.0;
     utter.volume = 1.0;
 
-    // Compact ボイスより通常ボイスを優先（品質が高く途切れにくい）
+    // Compactボイスより通常ボイスを優先（品質が高く安定）
     const voices = speechSynthesis.getVoices();
     const jv = voices.find(v => v.lang === 'ja-JP' && !v.name.includes('Compact'))
             || voices.find(v => v.lang === 'ja-JP')
@@ -323,20 +326,19 @@ function speak(text) {
       if (done) return;
       done = true;
       if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      clearTimeout(timeout);
+      clearTimeout(safetyTimer);
       isSpeaking = false;
       resolve();
     };
 
-    // iOSはonendが来ないことがあるのでタイムアウトを保険にする
-    const timeout = setTimeout(() => { if (!done) finish(); }, text.length * 130 + 2500);
+    // onendが来ない場合のタイムアウト保険
+    const safetyTimer = setTimeout(() => { if (!done) finish(); }, text.length * 130 + 2500);
 
     utter.onend = finish;
     utter.onerror = finish;
 
     if (IS_IOS) {
-      // ② 修正：pause()→resume() の交互呼び出しは途切れを悪化させる
-      //    paused 状態になったときだけ resume() する（300ms間隔）
+      // ② 修正：pause()→resume()交互はNG。paused状態のときだけresume()する
       keepAlive = setInterval(() => {
         if (done) { clearInterval(keepAlive); keepAlive = null; return; }
         if (speechSynthesis.paused) speechSynthesis.resume();
@@ -348,32 +350,41 @@ function speak(text) {
 }
 
 // ════════════════════════════════
-//  音声認識
-//  ③ インスタンスをセッション開始時に1回だけ生成して使い回す
-//    （毎回 new SR() すると iOS が毎回マイク権限を確認する）
-//  ④ interimResults = false に統一
-//    （iOS では true にすると認識結果が来ない）
+//  音声認識（iOSの権限問題の根本対策）
+//
+//  ③ 権限確認が毎回出る原因と対策：
+//    iOSはSpeechRecognitionのstart()を呼ぶたびに権限を確認するのではなく、
+//    「ユーザー操作のイベントハンドラの外」でstart()を呼ぶと権限確認が出る。
+//    → micDown(touchstart)の中で直接start()を呼ぶことで解決。
+//    また abort() でインスタンスを破棄すると次回も権限確認が出やすいため
+//    インスタンスを使い回し、onend後に再startする設計にする。
+//
+//  ④ 音声が認識されない原因と対策：
+//    Push-to-Talkでstop()を呼んでも、iOSはonresultが来る前にonendが
+//    発火することがある。→ onendの中でmanualTextを処理することで解決。
+//    指を離したタイミング（micReleased=true）かつonendが来たら処理する。
 // ════════════════════════════════
-function initSR() {
-  if (recognition) return; // 既に存在する場合は再利用
+
+function newSR() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return;
-  recognition = new SR();
-  recognition.lang = 'ja-JP';
-  recognition.continuous = false;      // iOS は true 非対応
-  recognition.interimResults = false;  // ④ iOS は false が必須
-  recognition.maxAlternatives = 1;
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = 'ja-JP';
+  r.continuous = false;       // iOSはtrue非対応
+  r.interimResults = false;   // ④ iOSはfalse必須（trueだと結果が来ない）
+  r.maxAlternatives = 1;
+  return r;
 }
 
 // ════════════════════════════════
-//  自動認識（Android Chrome など）
+//  自動認識（Android Chrome）
 // ════════════════════════════════
 function listenAuto() {
   if (isFinished || isSpeaking) return;
-  // ③ abort+新規生成ではなく既存インスタンスを使い回す
-  if (!recognition) initSR();
-  if (!recognition) return;
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
 
+  recognition = newSR();
+  if (!recognition) return;
   setVizStatus(true);
   isListening = true;
   let finalText = '';
@@ -412,7 +423,7 @@ function listenAuto() {
 }
 
 // ════════════════════════════════
-//  手動マイク（iOS Safari）
+//  手動マイク（iOS）
 // ════════════════════════════════
 function listenManual() {
   if (isFinished) return;
@@ -425,14 +436,19 @@ function micDown(e) {
   e.preventDefault();
   if (!awaitingInput || isFinished || isListening) return;
   ensureAudio();
-  manualText = '';
 
-  // ③ インスタンスを使い回す（abort+new SR はしない）
-  if (!recognition) initSR();
+  manualText = '';
+  micReleased = false;
+
+  // ③ 既存インスタンスがあればabortしてから新規作成
+  //    ※ iOSはtouchstartイベントハンドラ内でstart()を呼ぶことで
+  //      「ユーザー操作起因」と判定され権限確認ダイアログが抑制される
+  if (recognition) { try { recognition.abort(); } catch(ex){} recognition = null; }
+  recognition = newSR();
   if (!recognition) return;
 
-  // ④ ハンドラを毎回セットし直す
   recognition.onresult = ev => {
+    // ④ 結果をmanualTextに蓄積（onendで処理するのでここでは保存のみ）
     for (let i = ev.resultIndex; i < ev.results.length; i++) {
       if (ev.results[i].isFinal) {
         manualText += ev.results[i][0].transcript;
@@ -446,52 +462,68 @@ function micDown(e) {
   recognition.onerror = ev => {
     isListening = false;
     if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-      showAlert('マイクアクセス拒否', 'Safariの設定でマイクを「許可」にしてください。\n設定 → Safari → マイク → このWebサイトを許可');
+      showAlert('マイクアクセス拒否',
+        'マイクの許可が必要です。\niOSの設定アプリ → Safari（またはChrome）→ マイク → このサイトを「許可」にしてください。');
       endSession(true);
     }
-    // no-speech は micUp のタイムアウトで処理するため無視
+    // no-speech: 指を離した後onendが来るのでonendで処理する
   };
 
-  // onend は micUp の stop() 後に非同期で発火する。isListening の解除のみ行う
-  recognition.onend = () => { isListening = false; };
+  recognition.onend = () => {
+    // ④ 核心：onendが来た時点でmanualTextを処理する
+    //    指を離していれば（micReleased=true）すぐ処理、
+    //    まだ押していれば（ユーザーが長押し中）処理しない
+    isListening = false;
+    if (!micReleased) return; // まだ押している → 何もしない
+    finalizeMicInput();
+  };
 
   document.getElementById('micBtn').classList.add('recording');
   document.getElementById('micHint').textContent = '● 録音中… 話し終えたら指を離す';
   setVizStatus(true);
   isListening = true;
+
   try {
     recognition.start();
   } catch(ex) {
-    // 既に動いている場合は一度止めてから再 start
-    try { recognition.stop(); } catch(_) {}
-    setTimeout(() => { try { recognition.start(); } catch(__) {} }, 350);
+    isListening = false;
+    document.getElementById('micBtn').classList.remove('recording');
+    document.getElementById('micHint').textContent = '🎙 ボタンを押しながら話してください';
+    setVizStatus(false);
   }
 }
 
 function micUp(e) {
   e.preventDefault();
-  if (!isListening && manualText === '') return;
+  micReleased = true;
 
   document.getElementById('micBtn').classList.remove('recording');
   document.getElementById('micHint').textContent = '処理中…';
   setVizStatus(false);
 
+  // ④ stop()を呼んでonresult/onendを促す
   try { recognition.stop(); } catch(ex) {}
 
-  // ④ stop() 後に onresult → onend が非同期で届くため
-  //    800ms 待ってから manualText を読む（短すぎると空になる）
+  // onendが来ない場合の保険タイムアウト（1200ms）
   setTimeout(() => {
-    isListening = false;
-    document.getElementById('vizLive').textContent = '';
-    const text = manualText.trim();
-    if (text) {
-      awaitingInput = false;
-      showMicRow(false);
-      processAnswer(text);
-    } else {
-      document.getElementById('micHint').textContent = '聞き取れませんでした。もう一度押して話してください。';
-    }
-  }, 800);
+    if (micReleased && !awaitingInput) return; // 既に処理済み
+    finalizeMicInput();
+  }, 1200);
+}
+
+function finalizeMicInput() {
+  if (!micReleased) return;
+  micReleased = false; // 二重処理防止
+
+  document.getElementById('vizLive').textContent = '';
+  const text = manualText.trim();
+  if (text) {
+    awaitingInput = false;
+    showMicRow(false);
+    processAnswer(text);
+  } else {
+    document.getElementById('micHint').textContent = '聞き取れませんでした。もう一度押して話してください。';
+  }
 }
 
 function showMicRow(v) {
@@ -551,10 +583,9 @@ async function askQ(idx) {
 
 async function startSession() {
   ensureAudio();
-  // ③ SRインスタンスをここで一度だけ作成して使い回す（毎回newしない）
-  initSR();
   isRunning = true; isFinished = false; step = 1;
-  confTotal = 0; confCount = 0; answeredSteps = []; elapsedSec = 0; awaitingInput = false;
+  confTotal = 0; confCount = 0; answeredSteps = []; elapsedSec = 0;
+  awaitingInput = false; micReleased = false;
 
   document.getElementById('logArea').innerHTML = '';
   document.getElementById('stepNum').textContent = '1';
@@ -574,10 +605,9 @@ async function startSession() {
 
 function endSession(forced) {
   if (isFinished) return;
-  isFinished = true; isRunning = false; awaitingInput = false;
+  isFinished = true; isRunning = false; awaitingInput = false; micReleased = false;
   stopTimer(); showMicRow(false);
-  // ③ abort()+nullではなくstop()でインスタンスを保持（再利用して権限確認を回避）
-  if (recognition) { try { recognition.stop(); } catch(e){} }
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
   if (HAS_SS) window.speechSynthesis.cancel();
   setVizStatus(false); isListening = false;
   document.getElementById('vizText').textContent = 'STANDBY';
@@ -590,9 +620,9 @@ function endSession(forced) {
 
 async function finishSession() {
   if (isFinished) return;
-  isFinished = true; isRunning = false; awaitingInput = false;
+  isFinished = true; isRunning = false; awaitingInput = false; micReleased = false;
   stopTimer(); showMicRow(false);
-  if (recognition) { try { recognition.stop(); } catch(e){} }
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
   setVizStatus(false); isListening = false;
   document.getElementById('vizText').textContent = 'STANDBY';
   document.getElementById('vizLive').textContent = '';
@@ -741,5 +771,6 @@ function closeAlert() { document.getElementById('alertOverlay').classList.remove
 </script>
 </body>
 </html>
+
 
 
