@@ -190,7 +190,7 @@
 <header>
   <div class="header-logo">
     <div class="logo-badge">119</div>
-    <div class="header-title">AI通報訓練 v1.1.1</div>
+    <div class="header-title">AI通報訓練 v1.2.1</div>
   </div>
   <div class="status-dot" id="statusDot"></div>
 </header>
@@ -279,7 +279,7 @@ const QUESTIONS = [
   '119番です。火事ですか、救急ですか？',
   '住所を教えてください。',
   '火事の場合、どこが燃えていますか？煙は出ていますか？救急の場合、怪我ですか？病気ですか？',
-  '怪我又は病気の方は、何名いますか？',
+  '怪我又は病気の方は、なんめいいますか？',
   'あなたの今いる場所の目標や目印となるものがありますか？',
   'あなたのお名前と電話番号をおしえてください。',
 ];
@@ -304,30 +304,43 @@ function speak(text) {
 
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ja-JP';
-    utter.rate = IS_IOS ? 0.88 : 0.95;
+    // ② iOS はレートを下げると途切れにくくなる
+    utter.rate = IS_IOS ? 0.8 : 0.95;
     utter.pitch = 1.0;
     utter.volume = 1.0;
 
+    // Compact ボイスより通常ボイスを優先（品質が高く途切れにくい）
     const voices = speechSynthesis.getVoices();
-    const jv = voices.find(v => v.lang === 'ja-JP') || voices.find(v => v.lang.startsWith('ja'));
+    const jv = voices.find(v => v.lang === 'ja-JP' && !v.name.includes('Compact'))
+            || voices.find(v => v.lang === 'ja-JP')
+            || voices.find(v => v.lang.startsWith('ja'));
     if (jv) utter.voice = jv;
 
     let done = false;
-    // iOSはonendが来ないことがあるのでタイムアウトを保険にする
-    const timeout = setTimeout(() => { if (!done) { done = true; isSpeaking = false; resolve(); } }, text.length * 200 + 3500);
+    let keepAlive = null;
 
-    const finish = () => { if (done) return; done = true; clearTimeout(timeout); isSpeaking = false; resolve(); };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+      clearTimeout(timeout);
+      isSpeaking = false;
+      resolve();
+    };
+
+    // iOSはonendが来ないことがあるのでタイムアウトを保険にする
+    const timeout = setTimeout(() => { if (!done) finish(); }, text.length * 130 + 2500);
+
     utter.onend = finish;
     utter.onerror = finish;
 
-    // iOS SpeechSynthesis が止まるバグ対策
-    let keepAlive;
     if (IS_IOS) {
+      // ② 修正：pause()→resume() の交互呼び出しは途切れを悪化させる
+      //    paused 状態になったときだけ resume() する（300ms間隔）
       keepAlive = setInterval(() => {
-        if (done) { clearInterval(keepAlive); return; }
-        speechSynthesis.pause();
-        speechSynthesis.resume();
-      }, 200);
+        if (done) { clearInterval(keepAlive); keepAlive = null; return; }
+        if (speechSynthesis.paused) speechSynthesis.resume();
+      }, 300);
     }
 
     speechSynthesis.speak(utter);
@@ -335,16 +348,21 @@ function speak(text) {
 }
 
 // ════════════════════════════════
-//  音声認識ビルダー
+//  音声認識
+//  ③ インスタンスをセッション開始時に1回だけ生成して使い回す
+//    （毎回 new SR() すると iOS が毎回マイク権限を確認する）
+//  ④ interimResults = false に統一
+//    （iOS では true にすると認識結果が来ない）
 // ════════════════════════════════
-function buildSR() {
+function initSR() {
+  if (recognition) return; // 既に存在する場合は再利用
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const r = new SR();
-  r.lang = 'ja-JP';
-  r.continuous = false;          // iOS は true 非対応
-  r.interimResults = !IS_IOS;   // iOS は false が安定
-  r.maxAlternatives = 1;
-  return r;
+  if (!SR) return;
+  recognition = new SR();
+  recognition.lang = 'ja-JP';
+  recognition.continuous = false;      // iOS は true 非対応
+  recognition.interimResults = false;  // ④ iOS は false が必須
+  recognition.maxAlternatives = 1;
 }
 
 // ════════════════════════════════
@@ -352,23 +370,23 @@ function buildSR() {
 // ════════════════════════════════
 function listenAuto() {
   if (isFinished || isSpeaking) return;
-  if (recognition) { try { recognition.abort(); } catch(e){} }
+  // ③ abort+新規生成ではなく既存インスタンスを使い回す
+  if (!recognition) initSR();
+  if (!recognition) return;
 
-  recognition = buildSR();
   setVizStatus(true);
   isListening = true;
   let finalText = '';
 
   recognition.onresult = e => {
-    let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) {
         finalText += e.results[i][0].transcript;
         const c = e.results[i][0].confidence;
         if (c > 0) { confTotal += c; confCount++; }
-      } else { interim += e.results[i][0].transcript; }
+      }
     }
-    document.getElementById('vizLive').textContent = interim || finalText;
+    document.getElementById('vizLive').textContent = finalText;
   };
 
   recognition.onend = () => {
@@ -409,10 +427,11 @@ function micDown(e) {
   ensureAudio();
   manualText = '';
 
-  if (recognition) { try { recognition.abort(); } catch(ex){} }
-  recognition = buildSR();
-  recognition.interimResults = false;
+  // ③ インスタンスを使い回す（abort+new SR はしない）
+  if (!recognition) initSR();
+  if (!recognition) return;
 
+  // ④ ハンドラを毎回セットし直す
   recognition.onresult = ev => {
     for (let i = ev.resultIndex; i < ev.results.length; i++) {
       if (ev.results[i].isFinal) {
@@ -425,19 +444,28 @@ function micDown(e) {
   };
 
   recognition.onerror = ev => {
+    isListening = false;
     if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-      showAlert('マイクアクセス拒否', 'Safariの設定でマイクを「許可」にしてください。設定 → Safari → マイク');
+      showAlert('マイクアクセス拒否', 'Safariの設定でマイクを「許可」にしてください。\n設定 → Safari → マイク → このWebサイトを許可');
       endSession(true);
     }
+    // no-speech は micUp のタイムアウトで処理するため無視
   };
 
+  // onend は micUp の stop() 後に非同期で発火する。isListening の解除のみ行う
   recognition.onend = () => { isListening = false; };
 
   document.getElementById('micBtn').classList.add('recording');
   document.getElementById('micHint').textContent = '● 録音中… 話し終えたら指を離す';
   setVizStatus(true);
   isListening = true;
-  try { recognition.start(); } catch(ex) {}
+  try {
+    recognition.start();
+  } catch(ex) {
+    // 既に動いている場合は一度止めてから再 start
+    try { recognition.stop(); } catch(_) {}
+    setTimeout(() => { try { recognition.start(); } catch(__) {} }, 350);
+  }
 }
 
 function micUp(e) {
@@ -449,9 +477,11 @@ function micUp(e) {
   setVizStatus(false);
 
   try { recognition.stop(); } catch(ex) {}
-  isListening = false;
 
+  // ④ stop() 後に onresult → onend が非同期で届くため
+  //    800ms 待ってから manualText を読む（短すぎると空になる）
   setTimeout(() => {
+    isListening = false;
     document.getElementById('vizLive').textContent = '';
     const text = manualText.trim();
     if (text) {
@@ -461,7 +491,7 @@ function micUp(e) {
     } else {
       document.getElementById('micHint').textContent = '聞き取れませんでした。もう一度押して話してください。';
     }
-  }, 500);
+  }, 800);
 }
 
 function showMicRow(v) {
@@ -521,6 +551,8 @@ async function askQ(idx) {
 
 async function startSession() {
   ensureAudio();
+  // ③ SRインスタンスをここで一度だけ作成して使い回す（毎回newしない）
+  initSR();
   isRunning = true; isFinished = false; step = 1;
   confTotal = 0; confCount = 0; answeredSteps = []; elapsedSec = 0; awaitingInput = false;
 
@@ -544,7 +576,8 @@ function endSession(forced) {
   if (isFinished) return;
   isFinished = true; isRunning = false; awaitingInput = false;
   stopTimer(); showMicRow(false);
-  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+  // ③ abort()+nullではなくstop()でインスタンスを保持（再利用して権限確認を回避）
+  if (recognition) { try { recognition.stop(); } catch(e){} }
   if (HAS_SS) window.speechSynthesis.cancel();
   setVizStatus(false); isListening = false;
   document.getElementById('vizText').textContent = 'STANDBY';
@@ -559,7 +592,7 @@ async function finishSession() {
   if (isFinished) return;
   isFinished = true; isRunning = false; awaitingInput = false;
   stopTimer(); showMicRow(false);
-  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+  if (recognition) { try { recognition.stop(); } catch(e){} }
   setVizStatus(false); isListening = false;
   document.getElementById('vizText').textContent = 'STANDBY';
   document.getElementById('vizLive').textContent = '';
@@ -708,4 +741,5 @@ function closeAlert() { document.getElementById('alertOverlay').classList.remove
 </script>
 </body>
 </html>
+
 
