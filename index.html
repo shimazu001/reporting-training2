@@ -162,7 +162,7 @@
 <header>
   <div class="header-logo">
     <div class="logo-badge">119</div>
-    <div class="header-title">AI通報訓練 v1.3.1</div>
+    <div class="header-title">AI通報訓練 v1.3.2</div>
   </div>
   <div class="status-dot" id="statusDot"></div>
 </header>
@@ -290,8 +290,13 @@ function speak(text) {
 
 // ════════════════════════════════
 //  音声認識（Android Chrome / PC Chrome・Edge）
-//  ① 重複修正：continuous:false + interimResults:false で
-//    1発話につき1つの確定結果のみ受け取る設計にする
+//
+//  【設計方針】
+//  ・continuous:true + interimResults:true で発話をリアルタイム追跡
+//  ・途中発話（interim）が来るたびにタイマーをリセット
+//  ・「話が完全に止まってから2秒」経過したら回答確定
+//    → 話の途中で詰まっても2秒以内なら待ち続ける
+//  ・重複防止：processed フラグで二重処理をブロック
 // ════════════════════════════════
 function startListening() {
   if (isFinished || isSpeaking) return;
@@ -302,55 +307,95 @@ function startListening() {
 
   recognition = new SR();
   recognition.lang = 'ja-JP';
-  recognition.continuous = false;      // ① 1発話ごとに区切る（重複防止）
-  recognition.interimResults = false;  // ① 確定結果のみ取得（途中結果で重複しない）
+  recognition.continuous = true;      // 発話中ずっと聞き続ける
+  recognition.interimResults = true;  // 途中結果も受け取り「話し中」を検知する
   recognition.maxAlternatives = 1;
 
   setVizStatus(true);
   isListening = true;
 
-  let answered = false; // ① 二重処理防止フラグ
+  let finalText = '';     // 確定済みテキストの蓄積
+  let interimText = '';   // 現在の途中テキスト
+  let silenceTimer = null;
+  let processed = false;  // 二重処理防止
 
-  recognition.onresult = e => {
-    if (answered) return;
-    // ① resultIndex=0 の確定結果のみを使う（重複なし）
-    const result = e.results[e.results.length - 1];
-    if (!result.isFinal) return;
+  // 話が止まってから SILENCE_MS 後に確定する
+  const SILENCE_MS = 2000;
 
-    const text = result[0].transcript.trim();
-    const c = result[0].confidence;
-    if (c > 0) { confTotal += c; confCount++; }
-
-    // ① 認識結果をリアルタイム表示
-    document.getElementById('vizLive').textContent = text;
-
-    if (text) {
-      answered = true;
-      // 少し間を置いてから処理（onendより先に動作させる）
-      setTimeout(() => {
-        if (recognition) { try { recognition.abort(); } catch(ex){} recognition = null; }
-        isListening = false;
-        setVizStatus(false);
-        document.getElementById('vizLive').textContent = '';
-        processAnswer(text);
-      }, 300);
-    }
-  };
-
-  recognition.onend = () => {
-    if (answered) return; // ① 既に処理済みなら何もしない
+  const commit = () => {
+    if (processed) return;
+    processed = true;
+    clearTimeout(silenceTimer);
+    const text = (finalText + interimText).trim();
+    if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
     isListening = false;
     setVizStatus(false);
     document.getElementById('vizLive').textContent = '';
-    // 結果なしで終了した場合のみ再起動
-    setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
+    if (text) {
+      processAnswer(text);
+    } else {
+      // 何も取れなかった場合は再起動
+      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
+    }
+  };
+
+  const resetSilenceTimer = () => {
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(commit, SILENCE_MS);
+  };
+
+  recognition.onresult = e => {
+    if (processed) return;
+    let newFinal = '';
+    let newInterim = '';
+
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        newFinal += e.results[i][0].transcript;
+        const c = e.results[i][0].confidence;
+        if (c > 0) { confTotal += c; confCount++; }
+      } else {
+        newInterim += e.results[i][0].transcript;
+      }
+    }
+
+    if (newFinal) finalText += newFinal;
+    interimText = newInterim;
+
+    // ビジュアライザーに現在の認識状況を表示
+    document.getElementById('vizLive').textContent = finalText + interimText;
+
+    // 発話が続いている間はタイマーをリセットし続ける
+    resetSilenceTimer();
+  };
+
+  recognition.onend = () => {
+    // continuous:true でも切れることがある（ネットワーク等）
+    // processed でなければ、その時点の finalText で確定するか再起動
+    if (processed) return;
+    clearTimeout(silenceTimer);
+    isListening = false;
+    setVizStatus(false);
+    document.getElementById('vizLive').textContent = '';
+    if (finalText.trim()) {
+      processed = true;
+      processAnswer(finalText.trim());
+    } else {
+      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
+    }
   };
 
   recognition.onerror = e => {
-    if (answered) return;
+    if (processed) return;
+    clearTimeout(silenceTimer);
     isListening = false;
     if (e.error === 'no-speech') {
-      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
+      // 無音エラー：そのまま待つか再起動
+      if (finalText.trim()) {
+        commit(); // 途中まで取れていれば確定
+      } else {
+        setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
+      }
     } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
       showAlert('マイクアクセス拒否', 'ブラウザの設定でマイクを許可してから再度お試しください。');
       endSession(true);
@@ -604,6 +649,7 @@ function closeAlert() { document.getElementById('alertOverlay').classList.remove
 </script>
 </body>
 </html>
+
 
 
 
