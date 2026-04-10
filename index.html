@@ -71,15 +71,7 @@
   /* MAIN */
   main { width: 100%; max-width: 480px; flex: 1; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 11px; }
 
-  /* COMPAT BANNER */
-  .compat-banner {
-    background: rgba(255,143,0,0.1); border: 1px solid rgba(255,143,0,0.3);
-    border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--amber);
-    display: none; line-height: 1.6;
-  }
-  .compat-banner.visible { display: block; }
-
-  /* TIMER */
+  /* FOOTER */
   .timer-bar { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; }
   .timer-label { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--text-muted); text-transform: uppercase; }
   .timer-display { font-family: var(--mono); font-size: 26px; color: var(--amber); letter-spacing: 4px; text-shadow: 0 0 12px rgba(255,179,0,0.5); font-weight: 700; }
@@ -123,26 +115,6 @@
   .viz-text { font-size:12px; font-weight:700; color:var(--text-muted); letter-spacing:1px; font-family:var(--mono); flex-shrink:0; }
   .voice-viz.listening .viz-text { color:var(--red); }
   .viz-live { font-size:13px; font-weight:400; color:var(--text-dim); font-style:italic; flex:1; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
-  /* MIC BUTTON ROW */
-  .mic-row { display:none; flex-direction:column; align-items:center; gap:10px; }
-  .mic-row.visible { display:flex; }
-  .btn-mic {
-    width:80px; height:80px; border-radius:50%;
-    border:2px solid var(--red-dim); background:var(--card);
-    color:var(--text-muted); font-size:32px;
-    display:flex; align-items:center; justify-content:center;
-    cursor:pointer; transition:all 0.2s;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none; -webkit-user-select: none;
-  }
-  .btn-mic.recording {
-    background:rgba(229,57,53,0.18); border-color:var(--red); color:var(--red);
-    box-shadow:0 0 24px var(--red-glow);
-    animation:micPulse 1s ease-in-out infinite;
-  }
-  @keyframes micPulse { 0%,100%{box-shadow:0 0 10px var(--red-glow)} 50%{box-shadow:0 0 30px rgba(229,57,53,0.55)} }
-  .mic-hint { font-size:13px; font-weight:700; color:var(--text-muted); letter-spacing:1px; font-family:var(--mono); text-align:center; }
 
   /* MAIN BUTTON */
   .btn-main {
@@ -190,13 +162,12 @@
 <header>
   <div class="header-logo">
     <div class="logo-badge">119</div>
-    <div class="header-title">AI通報訓練 v1.2.1</div>
+    <div class="header-title">AI通報訓練 v1.3.1</div>
   </div>
   <div class="status-dot" id="statusDot"></div>
 </header>
 
 <main>
-  <div class="compat-banner" id="compatBanner"></div>
 
   <div class="timer-bar">
     <div>
@@ -218,14 +189,6 @@
     </div>
     <div class="viz-text" id="vizText">STANDBY</div>
     <div class="viz-live" id="vizLive"></div>
-  </div>
-
-  <!-- iOSおよび手動マイクボタン -->
-  <div class="mic-row" id="micRow">
-    <button class="btn-mic" id="micBtn"
-      ontouchstart="micDown(event)" ontouchend="micUp(event)"
-      onmousedown="micDown(event)" onmouseup="micUp(event)">🎙</button>
-    <div class="mic-hint" id="micHint">押しながら話す</div>
   </div>
 
   <div class="score-card" id="scoreCard">
@@ -251,33 +214,20 @@
 
 <script>
 // ════════════════════════════════
-//  環境検出
+//  定数・状態
 // ════════════════════════════════
-const UA = navigator.userAgent;
-const IS_IOS     = /iPhone|iPad|iPod/.test(UA);
-const IS_ANDROID = /Android/.test(UA);
-const IS_SAFARI  = /Safari/.test(UA) && !/Chrome/.test(UA);
 const HAS_SR = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 const HAS_SS = !!window.speechSynthesis;
 
-// iOS（Safari・Chrome両方）→ 手動マイクモード
-// iOS Chrome も内部は WebKit なので Safari と同じ制約がある
-const MANUAL_MODE = IS_IOS || (!IS_ANDROID && IS_SAFARI) || !HAS_SR;
-
-// ════════════════════════════════
-//  状態
-// ════════════════════════════════
 let step = 0, isRunning = false, isSpeaking = false, isFinished = false;
-let isListening = false, awaitingInput = false;
+let isListening = false;
 let timerInterval = null, elapsedSec = 0;
 let recognition = null;
 let confTotal = 0, confCount = 0;
 let answeredSteps = [];
 let audioCtx = null;
-let manualText = '';
-let micReleased = false; // 指を離した後 onend を待つフラグ
 
-// ① 「何名」→「なんめい」：iOS TTSは漢字「何名」を「なんな」と誤読するため平仮名で記述
+// 「何名」→「なんめい」：TTSの誤読を防ぐため平仮名で記述
 const QUESTIONS = [
   '119番です。火事ですか、救急ですか？',
   '住所を教えてください。',
@@ -296,8 +246,7 @@ function ensureAudio() {
 }
 
 // ════════════════════════════════
-//  音声合成
-//  ② 途切れ修正：pause/resume交互→paused時のみresume
+//  音声合成（Android / PC）
 // ════════════════════════════════
 function speak(text) {
   return new Promise(resolve => {
@@ -308,234 +257,115 @@ function speak(text) {
 
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = 'ja-JP';
-    utter.rate = IS_IOS ? 0.8 : 0.95;  // ② iOSはゆっくり読むと途切れにくい
+    utter.rate = 0.95;
     utter.pitch = 1.0;
     utter.volume = 1.0;
 
-    // Compactボイスより通常ボイスを優先（品質が高く安定）
     const voices = speechSynthesis.getVoices();
-    const jv = voices.find(v => v.lang === 'ja-JP' && !v.name.includes('Compact'))
-            || voices.find(v => v.lang === 'ja-JP')
-            || voices.find(v => v.lang.startsWith('ja'));
+    const jv = voices.find(v => v.lang === 'ja-JP') || voices.find(v => v.lang.startsWith('ja'));
     if (jv) utter.voice = jv;
 
     let done = false;
-    let keepAlive = null;
+    const safetyTimer = setTimeout(() => { if (!done) finish(); }, text.length * 150 + 3000);
 
     const finish = () => {
       if (done) return;
       done = true;
-      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
       clearTimeout(safetyTimer);
       isSpeaking = false;
       resolve();
     };
-
-    // onendが来ない場合のタイムアウト保険
-    const safetyTimer = setTimeout(() => { if (!done) finish(); }, text.length * 130 + 2500);
-
     utter.onend = finish;
     utter.onerror = finish;
-
-    if (IS_IOS) {
-      // ② 修正：pause()→resume()交互はNG。paused状態のときだけresume()する
-      keepAlive = setInterval(() => {
-        if (done) { clearInterval(keepAlive); keepAlive = null; return; }
-        if (speechSynthesis.paused) speechSynthesis.resume();
-      }, 300);
-    }
-
     speechSynthesis.speak(utter);
   });
 }
 
 // ════════════════════════════════
-//  音声認識（iOSの権限問題の根本対策）
-//
-//  ③ 権限確認が毎回出る原因と対策：
-//    iOSはSpeechRecognitionのstart()を呼ぶたびに権限を確認するのではなく、
-//    「ユーザー操作のイベントハンドラの外」でstart()を呼ぶと権限確認が出る。
-//    → micDown(touchstart)の中で直接start()を呼ぶことで解決。
-//    また abort() でインスタンスを破棄すると次回も権限確認が出やすいため
-//    インスタンスを使い回し、onend後に再startする設計にする。
-//
-//  ④ 音声が認識されない原因と対策：
-//    Push-to-Talkでstop()を呼んでも、iOSはonresultが来る前にonendが
-//    発火することがある。→ onendの中でmanualTextを処理することで解決。
-//    指を離したタイミング（micReleased=true）かつonendが来たら処理する。
+//  音声認識（Android Chrome / PC Chrome・Edge）
+//  continuous=true で途切れなく聞き続ける
 // ════════════════════════════════
-
-function newSR() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return null;
-  const r = new SR();
-  r.lang = 'ja-JP';
-  r.continuous = false;       // iOSはtrue非対応
-  r.interimResults = false;   // ④ iOSはfalse必須（trueだと結果が来ない）
-  r.maxAlternatives = 1;
-  return r;
-}
-
-// ════════════════════════════════
-//  自動認識（Android Chrome）
-// ════════════════════════════════
-function listenAuto() {
+function startListening() {
   if (isFinished || isSpeaking) return;
   if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
 
-  recognition = newSR();
-  if (!recognition) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+
+  recognition = new SR();
+  recognition.lang = 'ja-JP';
+  recognition.continuous = true;       // 話し終わるまで聞き続ける
+  recognition.interimResults = true;   // リアルタイムプレビュー表示
+  recognition.maxAlternatives = 1;
+
   setVizStatus(true);
   isListening = true;
+
   let finalText = '';
+  let silenceTimer = null;
+
+  const resetSilenceTimer = () => {
+    clearTimeout(silenceTimer);
+    // 発話停止から1.5秒で回答確定
+    silenceTimer = setTimeout(() => {
+      if (finalText.trim() && !isFinished) {
+        if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+        isListening = false;
+        setVizStatus(false);
+        document.getElementById('vizLive').textContent = '';
+        processAnswer(finalText.trim());
+      }
+    }, 1500);
+  };
 
   recognition.onresult = e => {
+    let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       if (e.results[i].isFinal) {
         finalText += e.results[i][0].transcript;
         const c = e.results[i][0].confidence;
         if (c > 0) { confTotal += c; confCount++; }
+        resetSilenceTimer();
+      } else {
+        interim += e.results[i][0].transcript;
       }
     }
-    document.getElementById('vizLive').textContent = finalText;
+    document.getElementById('vizLive').textContent = interim || finalText;
+    if (interim) resetSilenceTimer(); // 途中発話中もタイマーリセット
   };
 
   recognition.onend = () => {
+    clearTimeout(silenceTimer);
     if (isFinished) return;
     isListening = false;
     setVizStatus(false);
     document.getElementById('vizLive').textContent = '';
-    if (finalText.trim()) processAnswer(finalText.trim());
-    else setTimeout(() => { if (!isFinished && !isSpeaking) listenAuto(); }, 700);
+
+    if (finalText.trim()) {
+      processAnswer(finalText.trim());
+    } else {
+      // 無音で終わった場合は再起動
+      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
+    }
   };
 
   recognition.onerror = e => {
+    clearTimeout(silenceTimer);
     isListening = false;
     if (e.error === 'no-speech') {
-      setTimeout(() => { if (!isFinished && !isSpeaking) listenAuto(); }, 700);
+      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
     } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
       showAlert('マイクアクセス拒否', 'ブラウザの設定でマイクを許可してから再度お試しください。');
       endSession(true);
+    } else {
+      // その他のエラーは少し待って再起動
+      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 800);
     }
   };
 
-  try { recognition.start(); } catch(e) { setTimeout(() => listenAuto(), 600); }
-}
-
-// ════════════════════════════════
-//  手動マイク（iOS）
-// ════════════════════════════════
-function listenManual() {
-  if (isFinished) return;
-  awaitingInput = true;
-  showMicRow(true);
-  document.getElementById('micHint').textContent = '🎙 ボタンを押しながら話してください';
-}
-
-function micDown(e) {
-  e.preventDefault();
-  if (!awaitingInput || isFinished || isListening) return;
-  ensureAudio();
-
-  manualText = '';
-  micReleased = false;
-
-  // ③ 既存インスタンスがあればabortしてから新規作成
-  //    ※ iOSはtouchstartイベントハンドラ内でstart()を呼ぶことで
-  //      「ユーザー操作起因」と判定され権限確認ダイアログが抑制される
-  if (recognition) { try { recognition.abort(); } catch(ex){} recognition = null; }
-  recognition = newSR();
-  if (!recognition) return;
-
-  recognition.onresult = ev => {
-    // ④ 結果をmanualTextに蓄積（onendで処理するのでここでは保存のみ）
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      if (ev.results[i].isFinal) {
-        manualText += ev.results[i][0].transcript;
-        const c = ev.results[i][0].confidence;
-        if (c > 0) { confTotal += c; confCount++; }
-      }
-    }
-    document.getElementById('vizLive').textContent = manualText;
-  };
-
-  recognition.onerror = ev => {
-    isListening = false;
-    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-      showAlert('マイクアクセス拒否',
-        'マイクの許可が必要です。\niOSの設定アプリ → Safari（またはChrome）→ マイク → このサイトを「許可」にしてください。');
-      endSession(true);
-    }
-    // no-speech: 指を離した後onendが来るのでonendで処理する
-  };
-
-  recognition.onend = () => {
-    // ④ 核心：onendが来た時点でmanualTextを処理する
-    //    指を離していれば（micReleased=true）すぐ処理、
-    //    まだ押していれば（ユーザーが長押し中）処理しない
-    isListening = false;
-    if (!micReleased) return; // まだ押している → 何もしない
-    finalizeMicInput();
-  };
-
-  document.getElementById('micBtn').classList.add('recording');
-  document.getElementById('micHint').textContent = '● 録音中… 話し終えたら指を離す';
-  setVizStatus(true);
-  isListening = true;
-
-  try {
-    recognition.start();
-  } catch(ex) {
-    isListening = false;
-    document.getElementById('micBtn').classList.remove('recording');
-    document.getElementById('micHint').textContent = '🎙 ボタンを押しながら話してください';
-    setVizStatus(false);
+  try { recognition.start(); } catch(e) {
+    setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 600);
   }
-}
-
-function micUp(e) {
-  e.preventDefault();
-  micReleased = true;
-
-  document.getElementById('micBtn').classList.remove('recording');
-  document.getElementById('micHint').textContent = '処理中…';
-  setVizStatus(false);
-
-  // ④ stop()を呼んでonresult/onendを促す
-  try { recognition.stop(); } catch(ex) {}
-
-  // onendが来ない場合の保険タイムアウト（1200ms）
-  setTimeout(() => {
-    if (micReleased && !awaitingInput) return; // 既に処理済み
-    finalizeMicInput();
-  }, 1200);
-}
-
-function finalizeMicInput() {
-  if (!micReleased) return;
-  micReleased = false; // 二重処理防止
-
-  document.getElementById('vizLive').textContent = '';
-  const text = manualText.trim();
-  if (text) {
-    awaitingInput = false;
-    showMicRow(false);
-    processAnswer(text);
-  } else {
-    document.getElementById('micHint').textContent = '聞き取れませんでした。もう一度押して話してください。';
-  }
-}
-
-function showMicRow(v) {
-  const el = document.getElementById('micRow');
-  if (v) el.classList.add('visible'); else el.classList.remove('visible');
-}
-
-// ════════════════════════════════
-//  統一エントリ
-// ════════════════════════════════
-function startListening() {
-  if (MANUAL_MODE) listenManual(); else listenAuto();
 }
 
 // ════════════════════════════════
@@ -551,13 +381,19 @@ function processAnswer(text) {
 
   if (valid) {
     answeredSteps.push(step);
-    if (step < 6) { step++; document.getElementById('stepNum').textContent = step; setTimeout(() => askQ(step - 1), 500); }
-    else setTimeout(() => finishSession(), 500);
+    if (step < 6) {
+      step++;
+      document.getElementById('stepNum').textContent = step;
+      setTimeout(() => askQ(step - 1), 500);
+    } else {
+      setTimeout(() => finishSession(), 500);
+    }
   } else {
     const hint = getHint(step);
     setTimeout(async () => {
       showTyping(); await delay(600); removeTyping();
-      addLog('ai', hint); await speak(hint);
+      addLog('ai', hint);
+      await speak(hint);
       if (!isFinished) startListening();
     }, 300);
   }
@@ -585,13 +421,11 @@ async function startSession() {
   ensureAudio();
   isRunning = true; isFinished = false; step = 1;
   confTotal = 0; confCount = 0; answeredSteps = []; elapsedSec = 0;
-  awaitingInput = false; micReleased = false;
 
   document.getElementById('logArea').innerHTML = '';
   document.getElementById('stepNum').textContent = '1';
   document.getElementById('timerDisplay').textContent = '00:00';
   document.getElementById('scoreCard').classList.remove('visible');
-  showMicRow(false);
 
   const btn = document.getElementById('mainBtn');
   btn.className = 'btn-main stop'; btn.textContent = '■ 強制終了';
@@ -605,8 +439,8 @@ async function startSession() {
 
 function endSession(forced) {
   if (isFinished) return;
-  isFinished = true; isRunning = false; awaitingInput = false; micReleased = false;
-  stopTimer(); showMicRow(false);
+  isFinished = true; isRunning = false;
+  stopTimer();
   if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
   if (HAS_SS) window.speechSynthesis.cancel();
   setVizStatus(false); isListening = false;
@@ -620,8 +454,8 @@ function endSession(forced) {
 
 async function finishSession() {
   if (isFinished) return;
-  isFinished = true; isRunning = false; awaitingInput = false; micReleased = false;
-  stopTimer(); showMicRow(false);
+  isFinished = true; isRunning = false;
+  stopTimer();
   if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
   setVizStatus(false); isListening = false;
   document.getElementById('vizText').textContent = 'STANDBY';
@@ -658,8 +492,12 @@ function setVizStatus(active) {
   const dot = document.getElementById('statusDot');
   const viz = document.getElementById('voiceViz');
   const txt = document.getElementById('vizText');
-  if (active) { dot.classList.add('active'); viz.classList.add('listening'); txt.textContent = 'LISTENING'; }
-  else { dot.classList.remove('active'); viz.classList.remove('listening'); txt.textContent = isSpeaking ? 'AI SPEAKING' : 'STANDBY'; }
+  if (active) {
+    dot.classList.add('active'); viz.classList.add('listening'); txt.textContent = 'LISTENING';
+  } else {
+    dot.classList.remove('active'); viz.classList.remove('listening');
+    txt.textContent = isSpeaking ? 'AI SPEAKING' : 'STANDBY';
+  }
 }
 
 function addLog(role, text) {
@@ -675,50 +513,50 @@ function addLog(role, text) {
 function showTyping() {
   const area = document.getElementById('logArea');
   const el = document.createElement('div');
-  el.className='log-msg ai'; el.id='typingIndicator';
-  el.innerHTML='<div class="msg-label">▶ 指令センター</div><div class="typing-dots"><span></span><span></span><span></span></div>';
-  area.appendChild(el); area.scrollTop=area.scrollHeight;
+  el.className = 'log-msg ai'; el.id = 'typingIndicator';
+  el.innerHTML = '<div class="msg-label">▶ 指令センター</div><div class="typing-dots"><span></span><span></span><span></span></div>';
+  area.appendChild(el); area.scrollTop = area.scrollHeight;
 }
-function removeTyping() { const el=document.getElementById('typingIndicator'); if(el)el.remove(); }
-function delay(ms) { return new Promise(r=>setTimeout(r,ms)); }
+function removeTyping() { const el = document.getElementById('typingIndicator'); if (el) el.remove(); }
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ════════════════════════════════
 //  採点
 // ════════════════════════════════
 function calcScore() {
   const req = [1,2,3,4,5,6];
-  const ans = req.filter(s=>answeredSteps.includes(s));
-  const coverScore = (ans.length/req.length)*6;
-  const avgConf = confCount>0 ? confTotal/confCount : 0.5;
-  const confScore = avgConf*4;
-  const total = Math.min(10, Math.round((coverScore+confScore)*10)/10);
+  const ans = req.filter(s => answeredSteps.includes(s));
+  const coverScore = (ans.length / req.length) * 6;
+  const avgConf = confCount > 0 ? confTotal / confCount : 0.5;
+  const confScore = avgConf * 4;
+  const total = Math.min(10, Math.round((coverScore + confScore) * 10) / 10);
   return {
     total,
-    coverage: Math.round(coverScore*10)/10,
-    coveragePct: Math.round((ans.length/req.length)*100),
-    confidence: Math.round(confScore*10)/10,
-    confidencePct: Math.round(avgConf*100),
+    coverage: Math.round(coverScore * 10) / 10,
+    coveragePct: Math.round((ans.length / req.length) * 100),
+    confidence: Math.round(confScore * 10) / 10,
+    confidencePct: Math.round(avgConf * 100),
   };
 }
 
 function showScoreCard(score) {
   document.getElementById('scoreCard').classList.add('visible');
-  document.getElementById('scoreBig').innerHTML = score.total+'<span> / 10</span>';
+  document.getElementById('scoreBig').innerHTML = score.total + '<span> / 10</span>';
   const bd = document.getElementById('scoreBreakdown');
   bd.innerHTML = '';
-  [{label:'情報網羅性',val:score.coverage,max:6,pct:score.coveragePct},
-   {label:'音声信頼度',val:score.confidence,max:4,pct:score.confidencePct}].forEach(item=>{
-    const row=document.createElement('div'); row.className='score-row';
-    row.innerHTML=`<span class="score-row-label">${item.label}</span><div class="score-row-bar"><div class="score-row-fill" data-pct="${item.pct}" style="width:0%"></div></div><span class="score-row-val">${item.val} / ${item.max}</span>`;
+  [{label:'情報網羅性', val:score.coverage, max:6, pct:score.coveragePct},
+   {label:'音声信頼度', val:score.confidence, max:4, pct:score.confidencePct}].forEach(item => {
+    const row = document.createElement('div'); row.className = 'score-row';
+    row.innerHTML = `<span class="score-row-label">${item.label}</span><div class="score-row-bar"><div class="score-row-fill" data-pct="${item.pct}" style="width:0%"></div></div><span class="score-row-val">${item.val} / ${item.max}</span>`;
     bd.appendChild(row);
   });
-  setTimeout(()=>{bd.querySelectorAll('.score-row-fill').forEach(el=>{el.style.width=el.dataset.pct+'%';});},100);
-  let comment='';
-  if(score.total>=9) comment='非常に優秀な通報訓練です。必要な情報を正確かつ迅速に伝えることができました。';
-  else if(score.total>=7) comment='良い通報訓練です。概ね正確に伝えられましたが、一部情報が不足していました。';
-  else if(score.total>=5) comment='改善の余地があります。住所・氏名・電話番号などの必須情報を確実に伝える練習をしましょう。';
-  else comment='訓練が必要です。緊急時には冷静に、住所・状況・連絡先を明確に伝えることが重要です。';
-  document.getElementById('scoreComment').textContent=comment;
+  setTimeout(() => { bd.querySelectorAll('.score-row-fill').forEach(el => { el.style.width = el.dataset.pct + '%'; }); }, 100);
+  let comment = '';
+  if (score.total >= 9) comment = '非常に優秀な通報訓練です。必要な情報を正確かつ迅速に伝えることができました。';
+  else if (score.total >= 7) comment = '良い通報訓練です。概ね正確に伝えられましたが、一部情報が不足していました。';
+  else if (score.total >= 5) comment = '改善の余地があります。住所・氏名・電話番号などの必須情報を確実に伝える練習をしましょう。';
+  else comment = '訓練が必要です。緊急時には冷静に、住所・状況・連絡先を明確に伝えることが重要です。';
+  document.getElementById('scoreComment').textContent = comment;
 }
 
 // ════════════════════════════════
@@ -727,13 +565,13 @@ function showScoreCard(score) {
 function playBeep() {
   try {
     ensureAudio();
-    const osc=audioCtx.createOscillator(), gain=audioCtx.createGain();
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
     osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.type='sine'; osc.frequency.setValueAtTime(880,audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.3,audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+0.8);
-    osc.start(audioCtx.currentTime); osc.stop(audioCtx.currentTime+0.8);
-  } catch(e){}
+    osc.type = 'sine'; osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.8);
+    osc.start(audioCtx.currentTime); osc.stop(audioCtx.currentTime + 0.8);
+  } catch(e) {}
 }
 
 // ════════════════════════════════
@@ -742,35 +580,34 @@ function playBeep() {
 function handleMainBtn() {
   ensureAudio();
   if (!isRunning) {
-    if (!HAS_SS) { showAlert('非対応ブラウザ','音声合成に対応したブラウザをご使用ください（iOS Safari / Android Chrome）。'); return; }
-    if (!HAS_SR) { showAlert('音声認識非対応','音声認識に対応したブラウザをご使用ください（iOS Safari 14.5以上 / Android Chrome）。'); return; }
+    if (!HAS_SS) { showAlert('非対応ブラウザ', '音声合成に対応したブラウザをご使用ください（Chrome / Edge）。'); return; }
+    if (!HAS_SR) { showAlert('音声認識非対応', '音声認識に対応したブラウザをご使用ください（Chrome / Edge）。'); return; }
     startSession();
   } else {
     endSession(true);
   }
 }
 
-function showAlert(t,b) { document.getElementById('alertTitle').textContent=t; document.getElementById('alertBody').textContent=b; document.getElementById('alertOverlay').classList.add('visible'); }
+function showAlert(t, b) {
+  document.getElementById('alertTitle').textContent = t;
+  document.getElementById('alertBody').textContent = b;
+  document.getElementById('alertOverlay').classList.add('visible');
+}
 function closeAlert() { document.getElementById('alertOverlay').classList.remove('visible'); }
 
 // ════════════════════════════════
-//  初期化・互換性バナー
+//  初期化
 // ════════════════════════════════
 (function init() {
-  if (HAS_SS) { speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices(); }
-
-  const banner = document.getElementById('compatBanner');
-  if (IS_IOS) {
-    banner.textContent = '📱 iOSモード：🎙ボタンを押しながら話してください。初回はマイクの許可が必要です。';
-    banner.classList.add('visible');
-  } else if (MANUAL_MODE) {
-    banner.textContent = '📱 手動マイクモード：🎙ボタンを押しながら話してください。';
-    banner.classList.add('visible');
+  if (HAS_SS) {
+    speechSynthesis.getVoices();
+    speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
   }
 })();
 </script>
 </body>
 </html>
+
 
 
 
