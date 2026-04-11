@@ -292,12 +292,24 @@ function speak(text) {
 //  音声認識（Android Chrome / PC Chrome・Edge）
 //
 //  【設計方針】
-//  ・continuous:true + interimResults:true で発話をリアルタイム追跡
-//  ・途中発話（interim）が来るたびにタイマーをリセット
-//  ・「話が完全に止まってから2秒」経過したら回答確定
-//    → 話の途中で詰まっても2秒以内なら待ち続ける
-//  ・重複防止：processed フラグで二重処理をブロック
+//  ・continuous:false で1発話ずつ確定結果のみ取得（重複を根本排除）
+//  ・回答テキストはセッション変数 accumText に蓄積し、
+//    onend ごとに「まだ続きがあるか」を沈黙タイマーで判定
+//  ・話が止まってから SILENCE_MS 後に回答確定 → 次の質問へ
+//  ・話の途中で詰まっても SILENCE_MS 以内に再開すれば継続
 // ════════════════════════════════
+
+// 現在の質問に対する蓄積テキスト（startListening呼び出し元からリセット）
+let accumText = '';
+let silenceTimer = null;
+const SILENCE_MS = 2000; // 無音2秒で回答確定
+
+function resetAccum() {
+  accumText = '';
+  clearTimeout(silenceTimer);
+  silenceTimer = null;
+}
+
 function startListening() {
   if (isFinished || isSpeaking) return;
   if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
@@ -307,98 +319,64 @@ function startListening() {
 
   recognition = new SR();
   recognition.lang = 'ja-JP';
-  recognition.continuous = true;      // 発話中ずっと聞き続ける
-  recognition.interimResults = true;  // 途中結果も受け取り「話し中」を検知する
+  recognition.continuous = false;      // 1発話ごとに確定（重複防止の核心）
+  recognition.interimResults = false;  // 確定結果のみ（途中結果で重複しない）
   recognition.maxAlternatives = 1;
 
   setVizStatus(true);
   isListening = true;
 
-  let finalText = '';     // 確定済みテキストの蓄積
-  let interimText = '';   // 現在の途中テキスト
-  let silenceTimer = null;
-  let processed = false;  // 二重処理防止
-
-  // 話が止まってから SILENCE_MS 後に確定する
-  const SILENCE_MS = 2000;
-
-  const commit = () => {
-    if (processed) return;
-    processed = true;
-    clearTimeout(silenceTimer);
-    // finalTextのみを使用（interimTextは確定時にクリア済み）
-    const text = finalText.trim();
-    if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
-    isListening = false;
-    setVizStatus(false);
-    document.getElementById('vizLive').textContent = '';
-    if (text) {
-      processAnswer(text);
-    } else {
-      // 何も取れなかった場合は再起動
-      setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
-    }
-  };
-
-  const resetSilenceTimer = () => {
-    clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(commit, SILENCE_MS);
-  };
-
   recognition.onresult = e => {
-    if (processed) return;
-    let newFinal = '';
-    let newInterim = '';
+    // 確定した結果を1件だけ取り出す
+    const result = e.results[0];
+    if (!result || !result.isFinal) return;
 
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) {
-        newFinal += e.results[i][0].transcript;
-        const c = e.results[i][0].confidence;
-        if (c > 0) { confTotal += c; confCount++; }
-      } else {
-        newInterim += e.results[i][0].transcript;
-      }
-    }
+    const text = result[0].transcript.trim();
+    if (!text) return;
 
-    if (newFinal) {
-      finalText += newFinal;
-      interimText = ''; // 確定したら途中テキストはクリア
-    } else {
-      interimText = newInterim; // 途中テキストは上書き（追記しない）
-    }
+    const c = result[0].confidence;
+    if (c > 0) { confTotal += c; confCount++; }
 
-    // 表示：確定済み + 現在入力中（途中）
-    // interimTextは常に上書きなので重複しない
-    document.getElementById('vizLive').textContent = finalText + (interimText ? ' ' + interimText : '');
+    // 蓄積（今回の発話を追加）
+    accumText = accumText ? accumText + ' ' + text : text;
 
-    // 発話が続いている間はタイマーをリセットし続ける
-    resetSilenceTimer();
+    // ビジュアライザーに現在の蓄積テキストを表示
+    document.getElementById('vizLive').textContent = accumText;
+
+    // 沈黙タイマーをリセット（SILENCE_MS後に確定）
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      commitAnswer();
+    }, SILENCE_MS);
   };
 
   recognition.onend = () => {
-    // continuous:true でも切れることがある（ネットワーク等）
-    // processed でなければ、その時点の finalText で確定するか再起動
-    if (processed) return;
-    clearTimeout(silenceTimer);
     isListening = false;
-    setVizStatus(false);
-    document.getElementById('vizLive').textContent = '';
-    if (finalText.trim()) {
-      processed = true;
-      processAnswer(finalText.trim());
-    } else {
+    if (isFinished) return;
+
+    // 沈黙タイマーが動いている = まだ確定待ち → 再スタートして続きを待つ
+    if (silenceTimer !== null) {
+      // タイマー継続中：続きを聞くために再スタート
+      if (!isSpeaking) {
+        setTimeout(() => startListeningContinue(), 150);
+      }
+      return;
+    }
+
+    // タイマーなし・テキストなし → 無音で終了 → 再スタート
+    if (!accumText) {
       setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
     }
   };
 
   recognition.onerror = e => {
-    if (processed) return;
-    clearTimeout(silenceTimer);
     isListening = false;
     if (e.error === 'no-speech') {
-      // 無音エラー：そのまま待つか再起動
-      if (finalText.trim()) {
-        commit(); // 途中まで取れていれば確定
+      if (accumText) {
+        // すでに何か取れていれば沈黙タイマーを起動して確定待ちに移行
+        if (silenceTimer === null) {
+          silenceTimer = setTimeout(() => commitAnswer(), SILENCE_MS);
+        }
       } else {
         setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
       }
@@ -412,6 +390,84 @@ function startListening() {
 
   try { recognition.start(); } catch(e) {
     setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 600);
+  }
+}
+
+// 沈黙タイマー動作中に続きを待つための再スタート（蓄積はリセットしない）
+function startListeningContinue() {
+  if (isFinished || isSpeaking || silenceTimer === null) return;
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+
+  recognition = new SR();
+  recognition.lang = 'ja-JP';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  isListening = true;
+
+  recognition.onresult = e => {
+    const result = e.results[0];
+    if (!result || !result.isFinal) return;
+
+    const text = result[0].transcript.trim();
+    if (!text) return;
+
+    const c = result[0].confidence;
+    if (c > 0) { confTotal += c; confCount++; }
+
+    accumText = accumText ? accumText + ' ' + text : text;
+    document.getElementById('vizLive').textContent = accumText;
+
+    // 続きが来たのでタイマーをリセット
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => commitAnswer(), SILENCE_MS);
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    if (isFinished) return;
+    if (silenceTimer !== null && !isSpeaking) {
+      // まだタイマー動作中 → さらに続きを待つ
+      setTimeout(() => startListeningContinue(), 150);
+    }
+  };
+
+  recognition.onerror = e => {
+    isListening = false;
+    if (e.error === 'no-speech') {
+      // 無音 → タイマーは維持（沈黙カウント継続）
+      if (silenceTimer !== null && !isSpeaking) {
+        setTimeout(() => startListeningContinue(), 150);
+      }
+    } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      showAlert('マイクアクセス拒否', 'ブラウザの設定でマイクを許可してから再度お試しください。');
+      endSession(true);
+    }
+  };
+
+  try { recognition.start(); } catch(e) {}
+}
+
+// 回答確定処理
+function commitAnswer() {
+  clearTimeout(silenceTimer);
+  silenceTimer = null;
+  if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
+  isListening = false;
+  setVizStatus(false);
+  document.getElementById('vizLive').textContent = '';
+
+  const text = accumText.trim();
+  accumText = ''; // 次の質問のためにリセット
+
+  if (text && !isFinished) {
+    processAnswer(text);
+  } else if (!isFinished) {
+    setTimeout(() => { if (!isFinished && !isSpeaking) startListening(); }, 500);
   }
 }
 
@@ -439,9 +495,12 @@ function processAnswer(text) {
     const hint = getHint(step);
     setTimeout(async () => {
       showTyping(); await delay(600); removeTyping();
-      addLog('ai', hint);  // ヒントは表示・読み上げ共通
+      addLog('ai', hint);
       await speak(hint);
-      if (!isFinished) startListening();
+      if (!isFinished) {
+        resetAccum();
+        startListening();
+      }
     }, 300);
   }
 }
@@ -459,10 +518,12 @@ function getHint(s) {
 async function askQ(idx) {
   if (isFinished) return;
   showTyping(); await delay(500); removeTyping();
-  // ② ログには漢字表示、TTSには読み仮名テキストで読み上げ
   addLog('ai', QUESTIONS[idx].display);
   await speak(QUESTIONS[idx].speech);
-  if (!isFinished) startListening();
+  if (!isFinished) {
+    resetAccum(); // 新しい質問の前に蓄積テキストをリセット
+    startListening();
+  }
 }
 
 async function startSession() {
@@ -489,6 +550,7 @@ function endSession(forced) {
   if (isFinished) return;
   isFinished = true; isRunning = false;
   stopTimer();
+  clearTimeout(silenceTimer); silenceTimer = null; accumText = '';
   if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
   if (HAS_SS) window.speechSynthesis.cancel();
   setVizStatus(false); isListening = false;
@@ -504,6 +566,7 @@ async function finishSession() {
   if (isFinished) return;
   isFinished = true; isRunning = false;
   stopTimer();
+  clearTimeout(silenceTimer); silenceTimer = null; accumText = '';
   if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
   setVizStatus(false); isListening = false;
   document.getElementById('vizText').textContent = 'STANDBY';
@@ -655,6 +718,7 @@ function closeAlert() { document.getElementById('alertOverlay').classList.remove
 </script>
 </body>
 </html>
+
 
 
 
