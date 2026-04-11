@@ -162,7 +162,7 @@
 <header>
   <div class="header-logo">
     <div class="logo-badge">119</div>
-    <div class="header-title">AI通報訓練 v1.3.2</div>
+    <div class="header-title">AI通報訓練 v1.3.1</div>
   </div>
   <div class="status-dot" id="statusDot"></div>
 </header>
@@ -326,7 +326,8 @@ function startListening() {
     if (processed) return;
     processed = true;
     clearTimeout(silenceTimer);
-    const text = (finalText + interimText).trim();
+    // finalTextのみを使用（interimTextは確定時にクリア済み）
+    const text = finalText.trim();
     if (recognition) { try { recognition.abort(); } catch(e){} recognition = null; }
     isListening = false;
     setVizStatus(false);
@@ -359,11 +360,16 @@ function startListening() {
       }
     }
 
-    if (newFinal) finalText += newFinal;
-    interimText = newInterim;
+    if (newFinal) {
+      finalText += newFinal;
+      interimText = ''; // 確定したら途中テキストはクリア
+    } else {
+      interimText = newInterim; // 途中テキストは上書き（追記しない）
+    }
 
-    // ビジュアライザーに現在の認識状況を表示
-    document.getElementById('vizLive').textContent = finalText + interimText;
+    // 表示：確定済み + 現在入力中（途中）
+    // interimTextは常に上書きなので重複しない
+    document.getElementById('vizLive').textContent = finalText + (interimText ? ' ' + interimText : '');
 
     // 発話が続いている間はタイマーをリセットし続ける
     resetSilenceTimer();
@@ -649,6 +655,7 @@ function closeAlert() { document.getElementById('alertOverlay').classList.remove
 </script>
 </body>
 </html>
+
 
 
 
