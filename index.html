@@ -162,7 +162,7 @@
 <header>
   <div class="header-logo">
     <div class="logo-badge">119</div>
-    <div class="header-title">AI通報訓練 v1.3.1</div>
+    <div class="header-title">AI通報訓練 v1.3.2</div>
   </div>
   <div class="status-dot" id="statusDot"></div>
 </header>
@@ -245,8 +245,38 @@ const QUESTIONS = [
 ];
 
 // ════════════════════════════════
-//  AudioContext
+//  名詞変換テーブル
+//  音声認識は「読み」でテキスト化するため、
+//  読み仮名・誤認識パターン → 正しい表記 に変換する
+//  ※ 長いパターンから先に適用して部分置換の誤動作を防ぐ
 // ════════════════════════════════
+const NOUN_MAP = [
+  // ── 読み仮名パターン（ひらがな・カタカナ両対応）──
+  { pattern: /しとろ|シトロ|志都呂|citro/gi,          replace: '志戸呂' },
+  { pattern: /かんざ|カンザ|神座/gi,                   replace: '神座' },
+  { pattern: /なたしょう|ナタショウ|名田庄/gi,           replace: '名田庄' },
+  { pattern: /おおじろ|オオジロ|大代/gi,                replace: '大代' },
+  { pattern: /かなや|カナヤ|金谷/gi,                    replace: '金谷' },
+  { pattern: /あずま|アズマ|東/gi,                      replace: '東' },
+  { pattern: /なかださんぎょう|ナカダサンギョウ|ナカダ産業/gi, replace: 'ナカダ産業' },
+  { pattern: /はやかわしょうじ|ハヤカワショウジ|ハヤカワ商事/gi, replace: 'ハヤカワ商事' },
+  { pattern: /みのかわ|ミノカワ|蓑川/gi,                replace: '蓑川' },
+  { pattern: /へんもうき|ヘンモウキ|編網機/gi,           replace: '編網機' },
+  { pattern: /ねつしょりき|ネツショリキ|熱処理機/gi,     replace: '熱処理機' },
+  { pattern: /なんめい|ナンメイ|何名/gi,                replace: '何名' },
+  { pattern: /ごか|ゴカ|五和/gi,                        replace: '五和' },
+  { pattern: /ごうかく|ゴウカク|合格/gi,                replace: '合格' },
+];
+
+function applyNounMap(text) {
+  let result = text;
+  for (const entry of NOUN_MAP) {
+    result = result.replace(entry.pattern, entry.replace);
+  }
+  return result;
+}
+
+
 function ensureAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -340,8 +370,8 @@ function startListening() {
     // 蓄積（今回の発話を追加）
     accumText = accumText ? accumText + ' ' + text : text;
 
-    // ビジュアライザーに現在の蓄積テキストを表示
-    document.getElementById('vizLive').textContent = accumText;
+    // ビジュアライザーに現在の蓄積テキストを表示（名詞変換適用）
+    document.getElementById('vizLive').textContent = applyNounMap(accumText);
 
     // 沈黙タイマーをリセット（SILENCE_MS後に確定）
     clearTimeout(silenceTimer);
@@ -420,7 +450,7 @@ function startListeningContinue() {
     if (c > 0) { confTotal += c; confCount++; }
 
     accumText = accumText ? accumText + ' ' + text : text;
-    document.getElementById('vizLive').textContent = accumText;
+    document.getElementById('vizLive').textContent = applyNounMap(accumText);
 
     // 続きが来たのでタイマーをリセット
     clearTimeout(silenceTimer);
@@ -461,8 +491,11 @@ function commitAnswer() {
   setVizStatus(false);
   document.getElementById('vizLive').textContent = '';
 
-  const text = accumText.trim();
+  const raw  = accumText.trim();
   accumText = ''; // 次の質問のためにリセット
+
+  // 名詞変換テーブルを適用して正しい表記に変換
+  const text = raw ? applyNounMap(raw) : '';
 
   if (text && !isFinished) {
     processAnswer(text);
@@ -718,6 +751,7 @@ function closeAlert() { document.getElementById('alertOverlay').classList.remove
 </script>
 </body>
 </html>
+
 
 
 
